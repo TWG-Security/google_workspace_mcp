@@ -132,6 +132,20 @@ async def test_pin_failure_still_reports_sent_message(chat_service):
 
 
 @pytest.mark.asyncio
+async def test_pin_of_already_pinned_message_is_not_a_failure(chat_service):
+    pins = chat_service.spaces.return_value.messagePins.return_value
+    pins.create.return_value.execute.side_effect = HttpError(
+        Response({"status": "409"}),
+        json.dumps({"error": {"code": 409, "message": "Already exists"}}).encode(),
+    )
+
+    result = await _send(space_id="spaces/NEW", pin=True)
+
+    assert "Already pinned." in result
+    assert "Pin failed" not in result
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [

@@ -31,6 +31,7 @@ from gchat.chat_helpers import (
     _pin_message,
     _resolve_sender,
     _setup_space,
+    _validate_space_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,20 +286,7 @@ async def send_message(
     create_space_name = _none_if_blank(create_space_name)
     logger.info(f"[send_message] Email: '{user_google_email}', Space: '{space_id}'")
 
-    if create_space_name is not None:
-        if space_id or message_name is not None:
-            raise UserInputError(
-                "create_space_name cannot be combined with space_id or message_name: "
-                "a new space has no existing messages to target."
-            )
-    elif space_id is None:
-        raise UserInputError(
-            "Provide space_id, or create_space_name to create a space."
-        )
-    elif member_emails:
-        raise UserInputError(
-            "member_emails is only used with create_space_name, when creating a space."
-        )
+    _validate_space_target(space_id, message_name, create_space_name, member_emails)
 
     if message_name is not None:
         if thread_name or thread_key:

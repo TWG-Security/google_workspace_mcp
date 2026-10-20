@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 
 from googleapiclient.errors import HttpError
 
+from core.utils import UserInputError
+
 logger = logging.getLogger(__name__)
 
 _SENDER_CACHE_MAX_SIZE = 256
@@ -275,6 +277,29 @@ def _extract_rich_links(msg: dict) -> List[str]:
     return urls
 
 
+def _validate_space_target(
+    space_id: Optional[str],
+    message_name: Optional[str],
+    create_space_name: Optional[str],
+    member_emails: Optional[List[str]],
+) -> None:
+    """Require exactly one message target: an existing space or a space to create."""
+    if create_space_name is not None:
+        if space_id or message_name is not None:
+            raise UserInputError(
+                "create_space_name cannot be combined with space_id or message_name: "
+                "a new space has no existing messages to target."
+            )
+    elif space_id is None:
+        raise UserInputError(
+            "Provide space_id, or create_space_name to create a space."
+        )
+    elif member_emails:
+        raise UserInputError(
+            "member_emails is only used with create_space_name, when creating a space."
+        )
+
+
 async def _setup_space(
     chat_service, display_name: str, member_emails: Optional[List[str]] = None
 ) -> dict:
@@ -302,6 +327,8 @@ async def _pin_message(chat_service, space_id: str, message_name: str) -> str:
             .execute
         )
     except HttpError as e:
+        if e.resp.status == 409:
+            return "Already pinned."
         logger.warning(f"Pinning '{message_name}' failed: {e}")
         reason = getattr(e, "reason", None) or str(e)
         return f"Pin failed (message was still delivered): {reason}"
