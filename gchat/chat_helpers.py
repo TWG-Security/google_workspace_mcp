@@ -273,3 +273,36 @@ def _extract_rich_links(msg: dict) -> List[str]:
             if uri and uri not in text:
                 urls.append(uri)
     return urls
+
+
+async def _setup_space(
+    chat_service, display_name: str, member_emails: Optional[List[str]] = None
+) -> dict:
+    """Create a named space via spaces.setup; the caller is added as a manager."""
+    body = {"space": {"spaceType": "SPACE", "displayName": display_name}}
+    emails = [e.strip() for e in member_emails or [] if e and e.strip()]
+    if emails:
+        body["memberships"] = [
+            {"member": {"name": f"users/{email}", "type": "HUMAN"}} for email in emails
+        ]
+    return await asyncio.to_thread(chat_service.spaces().setup(body=body).execute)
+
+
+async def _pin_message(chat_service, space_id: str, message_name: str) -> str:
+    """Pin a message in its space and return a one-line outcome for the tool reply.
+
+    A pin failure is reported instead of raised: the message itself has already
+    been sent or edited, and raising would invite the caller to send it again.
+    """
+    try:
+        pin = await asyncio.to_thread(
+            chat_service.spaces()
+            .messagePins()
+            .create(parent=space_id, body={"message": message_name})
+            .execute
+        )
+    except HttpError as e:
+        logger.warning(f"Pinning '{message_name}' failed: {e}")
+        reason = getattr(e, "reason", None) or str(e)
+        return f"Pin failed (message was still delivered): {reason}"
+    return f"Pinned. Pin ID: {pin.get('name', '')}"
