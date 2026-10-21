@@ -41,16 +41,19 @@ Searches for messages in Google Chat spaces by text content.
 | page_size | integer | no | 25 | |
 
 ### send_message
-Sends a message to a Google Chat space. Can reply to existing threads, or edit a message already sent.
+Sends a message to a Google Chat space. Can reply to existing threads, edit a message already sent, create a new named space to post into, and pin the sent or edited message.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
 | user_google_email | string | yes | | |
-| space_id | string | yes | | |
 | message_text | string | yes | | |
+| space_id | string | no | | Required unless `create_space_name` is set |
 | thread_key | any | no | | App-defined key; creates thread if not found |
 | thread_name | any | no | | Resource name, e.g. `spaces/X/threads/Y` |
 | message_name | any | no | | Edit this message in place, e.g. `spaces/X/messages/Y`; must sit in `space_id`, own messages only, cannot be combined with a thread parameter |
+| create_space_name | string | no | | Create a named space with this display name and send into it; cannot be combined with `space_id` or `message_name`. Display names must be unique in the Workspace org. Needs the `chat.spaces` scope (in the default Chat scopes); if the first message then fails, the error names the new space so the retry can use `space_id` |
+| member_emails | list[string] | no | | With `create_space_name`: people to add to the new space (the caller is added automatically) |
+| pin | boolean | no | false | Pin the sent or edited message; needs the `chat.spaces` scope; a pin failure is reported in the result without undoing the send |
 
 ---
 
