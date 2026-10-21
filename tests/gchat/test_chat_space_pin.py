@@ -1,6 +1,7 @@
 """Tests for send_message creating spaces and pinning messages."""
 
 import json
+import ssl
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -165,6 +166,23 @@ async def test_send_failure_after_create_names_the_new_space(chat_service):
 
     with pytest.raises(ToolError, match="Retry with space_id='spaces/NEW'"):
         await _send(create_space_name="Project 8542")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", [ConnectionResetError("connection reset"), ssl.SSLError("bad record")]
+)
+async def test_interrupted_send_after_create_names_space_without_retrying(
+    chat_service, error
+):
+    spaces = chat_service.spaces.return_value
+    spaces.messages.return_value.create.return_value.execute.side_effect = error
+
+    with pytest.raises(ToolError, match="may or may not have been delivered") as exc:
+        await _send(create_space_name="Project 8542")
+
+    assert "space_id='spaces/NEW'" in str(exc.value)
+    spaces.setup.assert_called_once()
 
 
 @pytest.mark.asyncio

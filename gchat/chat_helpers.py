@@ -395,6 +395,17 @@ async def _create_message(chat_service, request_params: dict, created_space: boo
             f"Created space '{space_id}', but sending the message failed: "
             f"{getattr(e, 'reason', None) or e}. Retry with space_id='{space_id}'."
         ) from e
+    except Exception as e:
+        if not created_space:
+            raise
+        # Also stops handle_http_errors from retrying the whole call on an SSL
+        # error, which would try to create the same space again.
+        space_id = request_params["parent"]
+        raise ToolError(
+            f"Created space '{space_id}', but the message send was interrupted "
+            f"({e}), so it may or may not have been delivered. Check the space, "
+            f"then retry with space_id='{space_id}' if needed."
+        ) from e
 
 
 async def _pin_message(chat_service, space_id: str, message_name: str) -> str:
