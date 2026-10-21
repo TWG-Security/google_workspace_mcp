@@ -23,6 +23,7 @@ from core.gcs_attachment_storage import gcs_files_enabled
 from core.server import server
 from core.utils import TransientNetworkError, UserInputError, handle_http_errors
 from gchat.chat_helpers import (
+    _create_message,
     _execute_chat_request,
     _extract_rich_links,
     _name_spaces,
@@ -244,7 +245,7 @@ async def get_messages(
         openWorldHint=True,
     ),
 )
-@require_google_service("chat", ["chat_write", "chat_spaces"])
+@require_google_service("chat", "chat_write")
 @handle_http_errors("send_message", service_type="chat")
 async def send_message(
     service,
@@ -275,6 +276,9 @@ async def send_message(
         member_emails: With create_space_name, email addresses of people to add to
             the new space. The calling user is added automatically.
         pin: Pin the sent or edited message in its space.
+
+    Creating a space and pinning also need the chat.spaces scope (part of the
+    default Chat scopes); a plain send needs only chat.messages.
 
     Returns:
         str: Confirmation message with the sent or updated message details.
@@ -350,8 +354,8 @@ async def send_message(
         message_body["thread"] = {"threadKey": thread_key}
         request_params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 
-    message = await asyncio.to_thread(
-        service.spaces().messages().create(**request_params).execute
+    message = await _create_message(
+        service, request_params, created_space=create_space_name is not None
     )
 
     sent_message_name = message.get("name", "")

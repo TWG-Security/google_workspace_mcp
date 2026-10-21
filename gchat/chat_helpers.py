@@ -10,6 +10,7 @@ import logging
 import ssl
 from typing import Dict, List, Optional
 
+from fastmcp.exceptions import ToolError
 from googleapiclient.errors import HttpError
 
 from core.utils import UserInputError
@@ -310,7 +311,36 @@ async def _setup_space(
         body["memberships"] = [
             {"member": {"name": f"users/{email}", "type": "HUMAN"}} for email in emails
         ]
-    return await asyncio.to_thread(chat_service.spaces().setup(body=body).execute)
+    try:
+        return await asyncio.to_thread(chat_service.spaces().setup(body=body).execute)
+    except HttpError as e:
+        if _is_scope_error(e):
+            raise ToolError(
+                "Creating a space needs the chat.spaces scope, which this token "
+                "lacks. Re-authenticate with the default Chat scopes and retry."
+            ) from e
+        raise
+
+
+async def _create_message(chat_service, request_params: dict, created_space: bool):
+    """Create a message; when its space was just created, name that space on failure.
+
+    The space already exists at that point, and its display name is now taken, so
+    retrying with create_space_name would fail. The caller needs the space ID to
+    retry with space_id instead.
+    """
+    try:
+        return await asyncio.to_thread(
+            chat_service.spaces().messages().create(**request_params).execute
+        )
+    except HttpError as e:
+        if not created_space:
+            raise
+        space_id = request_params["parent"]
+        raise ToolError(
+            f"Created space '{space_id}', but sending the message failed: "
+            f"{getattr(e, 'reason', None) or e}. Retry with space_id='{space_id}'."
+        ) from e
 
 
 async def _pin_message(chat_service, space_id: str, message_name: str) -> str:
@@ -330,6 +360,14 @@ async def _pin_message(chat_service, space_id: str, message_name: str) -> str:
         if e.resp.status == 409:
             return "Already pinned."
         logger.warning(f"Pinning '{message_name}' failed: {e}")
+        if _is_scope_error(e):
+            return (
+                "Pin failed (message was still delivered): pinning needs the "
+                "chat.spaces scope, which this token lacks."
+            )
         reason = getattr(e, "reason", None) or str(e)
         return f"Pin failed (message was still delivered): {reason}"
+    except Exception as e:
+        logger.warning(f"Pinning '{message_name}' failed unexpectedly: {e}")
+        return f"Pin failed (message was still delivered): {e}"
     return f"Pinned. Pin ID: {pin.get('name', '')}"

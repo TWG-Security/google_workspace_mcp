@@ -4,6 +4,7 @@ import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from fastmcp.exceptions import ToolError
 from googleapiclient.errors import HttpError
 from httplib2 import Response
 
@@ -52,9 +53,18 @@ async def _send(**kwargs):
     )
 
 
-def test_send_message_requests_spaces_scope():
-    assert CHAT_WRITE_SCOPE in send_message._required_google_scopes
-    assert CHAT_SPACES_SCOPE in send_message._required_google_scopes
+def _scope_error():
+    detail = {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+    }
+    body = {"error": {"code": 403, "message": "Forbidden", "details": [detail]}}
+    return HttpError(Response({"status": "403"}), json.dumps(body).encode())
+
+
+def test_plain_send_needs_only_messages_scope():
+    assert send_message._required_google_scopes == [CHAT_WRITE_SCOPE]
+    assert CHAT_SPACES_SCOPE not in send_message._required_google_scopes
 
 
 @pytest.mark.asyncio
@@ -143,6 +153,50 @@ async def test_pin_of_already_pinned_message_is_not_a_failure(chat_service):
 
     assert "Already pinned." in result
     assert "Pin failed" not in result
+
+
+@pytest.mark.asyncio
+async def test_send_failure_after_create_names_the_new_space(chat_service):
+    messages = chat_service.spaces.return_value.messages.return_value
+    messages.create.return_value.execute.side_effect = HttpError(
+        Response({"status": "400"}),
+        json.dumps({"error": {"code": 400, "message": "Bad request"}}).encode(),
+    )
+
+    with pytest.raises(ToolError, match="Retry with space_id='spaces/NEW'"):
+        await _send(create_space_name="Project 8542")
+
+
+@pytest.mark.asyncio
+async def test_create_space_without_spaces_scope_says_so(chat_service):
+    spaces = chat_service.spaces.return_value
+    spaces.setup.return_value.execute.side_effect = _scope_error()
+
+    with pytest.raises(ToolError, match="chat.spaces scope"):
+        await _send(create_space_name="Project 8542")
+
+    spaces.messages.return_value.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_scope_error(), "pinning needs the chat.spaces scope"),
+        (ConnectionResetError("connection reset"), "connection reset"),
+    ],
+)
+async def test_pin_errors_still_report_the_delivered_message(
+    chat_service, error, expected
+):
+    pins = chat_service.spaces.return_value.messagePins.return_value
+    pins.create.return_value.execute.side_effect = error
+
+    result = await _send(space_id="spaces/NEW", pin=True)
+
+    assert "Message sent to space 'spaces/NEW'" in result
+    assert "Pin failed (message was still delivered)" in result
+    assert expected in result
 
 
 @pytest.mark.asyncio
