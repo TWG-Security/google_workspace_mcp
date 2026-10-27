@@ -276,8 +276,9 @@ async def send_message(
             send the message into it. Cannot be combined with space_id,
             message_name or thread_name.
         member_emails: With create_space_name, email addresses of people to add to
-            the new space. The calling user is added automatically. Members
-            that cannot be confirmed afterwards are named in the result.
+            the new space (people only, at most 49). The calling user is added
+            automatically. Pending invitations and members that cannot be
+            confirmed afterwards are named in the result.
         pin: Pin the sent or edited message in its space.
 
     Creating a space and pinning also need the chat.spaces scope (part of the
@@ -294,7 +295,12 @@ async def send_message(
     logger.info(f"[send_message] Email: '{user_google_email}', Space: '{space_id}'")
 
     _validate_space_target(
-        space_id, message_name, create_space_name, member_emails, thread_name
+        space_id,
+        message_name,
+        create_space_name,
+        member_emails,
+        thread_name,
+        caller_email=user_google_email,
     )
 
     if message_name is not None:

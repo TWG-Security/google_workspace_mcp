@@ -28,6 +28,8 @@ _SPACE_NAME_MAX_MEMBERS = 3
 _PEOPLE_BATCH_SIZE = 200  # people.getBatchGet limit
 _MAX_CONSECUTIVE_MEMBER_LOOKUP_FAILURES = 2
 _SCOPE_ERROR_REASON = "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+_SPACE_SETUP_MAX_MEMBERS = 49  # spaces.setup limit, not counting the caller
+_SPACE_DISPLAY_NAME_MAX_LENGTH = 128
 _SEARCH_MESSAGES_RETRY_BASE_DELAY_SECONDS = 1
 
 
@@ -285,6 +287,7 @@ def _validate_space_target(
     create_space_name: Optional[str],
     member_emails: Optional[List[str]],
     thread_name: Optional[str] = None,
+    caller_email: Optional[str] = None,
 ) -> None:
     """Require exactly one message target: an existing space or a space to create."""
     if create_space_name is not None:
@@ -293,6 +296,22 @@ def _validate_space_target(
                 "create_space_name cannot be combined with space_id, message_name "
                 "or thread_name: a new space has no existing messages or threads "
                 "to target."
+            )
+        if len(create_space_name) > _SPACE_DISPLAY_NAME_MAX_LENGTH:
+            raise UserInputError(
+                f"create_space_name is limited to {_SPACE_DISPLAY_NAME_MAX_LENGTH} "
+                "characters."
+            )
+        emails = _clean_emails(member_emails, caller_email)
+        invalid = [e for e in emails if "@" not in e]
+        if invalid:
+            raise UserInputError(
+                f"member_emails must be email addresses of people: {', '.join(invalid)}"
+            )
+        if len(emails) > _SPACE_SETUP_MAX_MEMBERS:
+            raise UserInputError(
+                f"A new space can start with at most {_SPACE_SETUP_MAX_MEMBERS} "
+                f"members besides you; {len(emails)} were given."
             )
     elif space_id is None:
         raise UserInputError(
@@ -307,10 +326,16 @@ def _validate_space_target(
 def _clean_emails(
     member_emails: Optional[List[str]], caller_email: Optional[str] = None
 ) -> List[str]:
-    """Strip blank entries and the caller, whom spaces.setup adds on its own."""
-    caller = (caller_email or "").strip().lower()
-    emails = [e.strip() for e in member_emails or [] if e and e.strip()]
-    return [e for e in emails if e.lower() != caller]
+    """Normalize member emails: drop blanks, a users/ prefix, duplicates and the
+    caller, whom spaces.setup adds on its own."""
+    seen = {(caller_email or "").strip().lower()}
+    emails = []
+    for email in member_emails or []:
+        email = (email or "").strip().removeprefix("users/")
+        if email and email.lower() not in seen:
+            seen.add(email.lower())
+            emails.append(email)
+    return emails
 
 
 async def _setup_space(
@@ -341,9 +366,16 @@ async def _setup_space(
             )
         except OSError as e:
             logger.warning(f"spaces.setup interrupted ({e}); retrying with requestId")
-            return await asyncio.to_thread(
-                chat_service.spaces().setup(body=body).execute
-            )
+            try:
+                return await asyncio.to_thread(
+                    chat_service.spaces().setup(body=body).execute
+                )
+            except OSError as retry_error:
+                raise ToolError(
+                    f"Creating space '{display_name}' was interrupted twice "
+                    f"({retry_error}), so it may already exist. Check list_spaces "
+                    "before retrying."
+                ) from retry_error
     except HttpError as e:
         if _is_scope_error(e):
             raise ToolError(
@@ -362,19 +394,26 @@ async def _unconfirmed_members(
     """Check each requested member of a new space; describe any not confirmed.
 
     The spaces.setup response does not list memberships, so each email is looked
-    up with members.get, which accepts an email as the member ID. Failures are
-    reported rather than raised: the space already exists, and an error would
-    prompt the client to create it again.
+    up with members.get, which accepts an email as the member ID. People outside
+    the organization are invited rather than added, so they are listed as pending.
+    Failures are reported rather than raised: the space already exists, and an
+    error would prompt the client to create it again.
     """
     unconfirmed = []
+    invited = []
     for email in _clean_emails(member_emails, caller_email):
         try:
-            await asyncio.to_thread(
+            membership = await asyncio.to_thread(
                 chat_service.spaces()
                 .members()
                 .get(name=f"{space_id}/members/{email}")
                 .execute
             )
+            state = membership.get("state")
+            if state == "INVITED":
+                invited.append(email)
+            elif state != "JOINED":
+                unconfirmed.append(email)
         except HttpError as e:
             if _is_scope_error(e):
                 return (
@@ -385,12 +424,15 @@ async def _unconfirmed_members(
         except Exception as e:
             logger.debug(f"Could not confirm member {email} of {space_id}: {e}")
             unconfirmed.append(email)
-    if not unconfirmed:
-        return ""
-    return (
-        f"Member additions not confirmed for: {', '.join(unconfirmed)}. "
-        "They may not have been added to the space."
-    )
+    notes = []
+    if invited:
+        notes.append(f"Invited (pending acceptance): {', '.join(invited)}.")
+    if unconfirmed:
+        notes.append(
+            f"Member additions not confirmed for: {', '.join(unconfirmed)}. "
+            "They may not have been added to the space."
+        )
+    return "\n".join(notes)
 
 
 async def _create_message(chat_service, request_params: dict, created_space: bool):
@@ -412,11 +454,11 @@ async def _create_message(chat_service, request_params: dict, created_space: boo
             f"Created space '{space_id}', but sending the message failed: "
             f"{getattr(e, 'reason', None) or e}. Retry with space_id='{space_id}'."
         ) from e
-    except Exception as e:
+    except OSError as e:
         if not created_space:
             raise
-        # Also stops handle_http_errors from retrying the whole call on an SSL
-        # error, which would try to create the same space again.
+        # A dropped connection leaves delivery unknown; name the new space so the
+        # retry targets it instead of creating another one.
         space_id = request_params["parent"]
         raise ToolError(
             f"Created space '{space_id}', but the message send was interrupted "

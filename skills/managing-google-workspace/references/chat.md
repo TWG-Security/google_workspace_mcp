@@ -54,7 +54,7 @@ Sends a message to a Google Chat space. Can reply to existing threads, edit a me
 | thread_name | string | no | | Resource name, e.g. `spaces/X/threads/Y` |
 | message_name | string | no | | Edit this message in place, e.g. `spaces/X/messages/Y`; must sit in `space_id`, own messages only, cannot be combined with a thread parameter |
 | create_space_name | string | no | | Create a named space with this display name and send into it; cannot be combined with `space_id`, `message_name` or `thread_name`. Display names must be unique in the Workspace org. Needs the `chat.spaces` scope (in the default Chat scopes); if the first message then fails, the error names the new space so the retry can use `space_id` |
-| member_emails | list[string] | no | | With `create_space_name`: people to add to the new space (the caller is added automatically); each is checked afterwards and any not confirmed are named in the result |
+| member_emails | list[string] | no | | With `create_space_name`: email addresses of people (not groups) to add to the new space, at most 49 (the caller is added automatically); each is checked afterwards, and pending invitations or members not confirmed are named in the result |
 | pin | boolean | no | false | Pin the sent or edited message; needs the `chat.spaces` scope; a pin failure is reported in the result without undoing the send |
 
 ---

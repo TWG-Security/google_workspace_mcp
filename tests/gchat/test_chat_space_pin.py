@@ -40,6 +40,9 @@ def chat_service(monkeypatch):
         "name": "spaces/NEW/messages/M",
         "createTime": "2026-01-01T00:00:00Z",
     }
+    spaces.members.return_value.get.return_value.execute.return_value = {
+        "state": "JOINED"
+    }
     spaces.messagePins.return_value.create.return_value.execute.return_value = {
         "name": "spaces/NEW/messagePins/M",
         "message": "spaces/NEW/messages/M",
@@ -111,6 +114,69 @@ async def test_create_space_leaves_out_the_caller(chat_service):
 
 
 @pytest.mark.asyncio
+async def test_create_space_cleans_member_emails(chat_service):
+    await _send(
+        create_space_name="Project 8542",
+        member_emails=["users/a@example.com", "A@Example.com", "b@example.com"],
+    )
+
+    spaces = chat_service.spaces.return_value
+    assert spaces.setup.call_args.kwargs["body"]["memberships"] == [
+        {"member": {"name": "users/a@example.com", "type": "HUMAN"}},
+        {"member": {"name": "users/b@example.com", "type": "HUMAN"}},
+    ]
+    assert spaces.members.return_value.get.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_create_space_with_only_the_caller_sends_no_memberships(chat_service):
+    await _send(create_space_name="Solo", member_emails=["test@example.com", " "])
+
+    spaces = chat_service.spaces.return_value
+    assert "memberships" not in spaces.setup.call_args.kwargs["body"]
+    spaces.members.return_value.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_space_lists_invited_and_missing_members(chat_service):
+    states = {"a@example.com": "INVITED", "b@example.com": "NOT_A_MEMBER"}
+    members = chat_service.spaces.return_value.members.return_value
+    members.get.side_effect = lambda name: Mock(
+        execute=Mock(return_value={"state": states[name.rsplit("/", 1)[1]]})
+    )
+
+    result = await _send(
+        create_space_name="Project 8542",
+        member_emails=["a@example.com", "b@example.com"],
+    )
+
+    assert "Invited (pending acceptance): a@example.com." in result
+    assert "Member additions not confirmed for: b@example.com." in result
+
+
+@pytest.mark.asyncio
+async def test_create_space_and_pin_pins_in_the_new_space(chat_service):
+    result = await _send(create_space_name="Project 8542", pin=True)
+
+    chat_service.spaces.return_value.messagePins.return_value.create.assert_called_once_with(
+        parent="spaces/NEW", body={"message": "spaces/NEW/messages/M"}
+    )
+    assert "Created space" in result and "Pinned." in result
+
+
+@pytest.mark.asyncio
+async def test_setup_interrupted_twice_says_the_space_may_exist(chat_service):
+    setup = chat_service.spaces.return_value.setup
+    setup.return_value.execute.side_effect = ConnectionResetError("connection reset")
+
+    with pytest.raises(ToolError, match="may already exist"):
+        await _send(create_space_name="Project 8542")
+
+    assert setup.call_count == 2
+    chat_service.spaces.return_value.messages.return_value.create.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_space_confirms_each_member(chat_service):
     result = await _send(
         create_space_name="Project 8542", member_emails=["a@example.com"]
@@ -126,6 +192,7 @@ async def test_create_space_confirms_each_member(chat_service):
 async def test_create_space_reports_members_not_confirmed(chat_service):
     def get(name):
         request = Mock()
+        request.execute.return_value = {"state": "JOINED"}
         if name.endswith("b@example.com"):
             request.execute.side_effect = HttpError(
                 Response({"status": "404"}),
@@ -336,6 +403,15 @@ async def test_pin_errors_still_report_the_delivered_message(
         (
             {"create_space_name": "X", "thread_name": "spaces/S/threads/T"},
             "thread_name",
+        ),
+        ({"create_space_name": "X" * 129}, "128 characters"),
+        ({"create_space_name": "X", "member_emails": ["Alice"]}, "Alice"),
+        (
+            {
+                "create_space_name": "X",
+                "member_emails": [f"u{i}@example.com" for i in range(50)],
+            },
+            "at most 49",
         ),
     ],
 )
