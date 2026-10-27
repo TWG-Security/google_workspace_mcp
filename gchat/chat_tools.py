@@ -272,7 +272,8 @@ async def send_message(
             Must be a message of space_id. Only the text is replaced, and only the
             author can edit their own message.
         create_space_name: Create a new named space with this display name, then
-            send the message into it. Cannot be combined with space_id or message_name.
+            send the message into it. Cannot be combined with space_id,
+            message_name or thread_name.
         member_emails: With create_space_name, email addresses of people to add to
             the new space. The calling user is added automatically.
         pin: Pin the sent or edited message in its space.
@@ -290,7 +291,9 @@ async def send_message(
     create_space_name = _none_if_blank(create_space_name)
     logger.info(f"[send_message] Email: '{user_google_email}', Space: '{space_id}'")
 
-    _validate_space_target(space_id, message_name, create_space_name, member_emails)
+    _validate_space_target(
+        space_id, message_name, create_space_name, member_emails, thread_name
+    )
 
     if message_name is not None:
         if thread_name or thread_key:

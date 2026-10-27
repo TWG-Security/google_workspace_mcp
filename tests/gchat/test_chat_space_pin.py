@@ -2,7 +2,7 @@
 
 import json
 import ssl
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -79,6 +79,7 @@ async def test_create_space_with_members_then_send(chat_service):
     spaces.setup.assert_called_once_with(
         body={
             "space": {"spaceType": "SPACE", "displayName": "Project 8542"},
+            "requestId": ANY,
             "memberships": [
                 {"member": {"name": "users/a@example.com", "type": "HUMAN"}},
                 {"member": {"name": "users/b@example.com", "type": "HUMAN"}},
@@ -98,7 +99,10 @@ async def test_create_space_without_members_omits_memberships(chat_service):
     await _send(create_space_name="Solo")
 
     chat_service.spaces.return_value.setup.assert_called_once_with(
-        body={"space": {"spaceType": "SPACE", "displayName": "Solo"}}
+        body={
+            "space": {"spaceType": "SPACE", "displayName": "Solo"},
+            "requestId": ANY,
+        }
     )
 
 
@@ -186,6 +190,37 @@ async def test_interrupted_send_after_create_names_space_without_retrying(
 
 
 @pytest.mark.asyncio
+async def test_interrupted_setup_retries_once_with_the_same_request_id(chat_service):
+    setup = chat_service.spaces.return_value.setup
+    setup.return_value.execute.side_effect = [
+        ConnectionResetError("connection reset"),
+        {"name": "spaces/NEW", "displayName": "Project 8542"},
+    ]
+
+    result = await _send(create_space_name="Project 8542")
+
+    first, second = setup.call_args_list
+    assert first.kwargs["body"]["requestId"]
+    assert first.kwargs["body"] == second.kwargs["body"]
+    assert "Created space 'Project 8542' (ID: spaces/NEW)" in result
+
+
+@pytest.mark.asyncio
+async def test_setup_http_error_is_not_retried(chat_service):
+    setup = chat_service.spaces.return_value.setup
+    setup.return_value.execute.side_effect = HttpError(
+        Response({"status": "409"}),
+        json.dumps({"error": {"code": 409, "message": "ALREADY_EXISTS"}}).encode(),
+    )
+
+    with pytest.raises(Exception, match="ALREADY_EXISTS"):
+        await _send(create_space_name="Project 8542")
+
+    setup.assert_called_once()
+    chat_service.spaces.return_value.messages.return_value.create.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_space_without_spaces_scope_says_so(chat_service):
     spaces = chat_service.spaces.return_value
     spaces.setup.return_value.execute.side_effect = _scope_error()
@@ -229,6 +264,10 @@ async def test_pin_errors_still_report_the_delivered_message(
             "create_space_name",
         ),
         ({"space_id": "spaces/S", "member_emails": ["a@example.com"]}, "member_emails"),
+        (
+            {"create_space_name": "X", "thread_name": "spaces/S/threads/T"},
+            "thread_name",
+        ),
     ],
 )
 async def test_invalid_space_arguments(chat_service, kwargs, match):

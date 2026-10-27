@@ -8,6 +8,7 @@ resolution for Chat senders and spaces via the People API.
 import asyncio
 import logging
 import ssl
+import uuid
 from typing import Dict, List, Optional
 
 from fastmcp.exceptions import ToolError
@@ -283,13 +284,15 @@ def _validate_space_target(
     message_name: Optional[str],
     create_space_name: Optional[str],
     member_emails: Optional[List[str]],
+    thread_name: Optional[str] = None,
 ) -> None:
     """Require exactly one message target: an existing space or a space to create."""
     if create_space_name is not None:
-        if space_id or message_name is not None:
+        if space_id or message_name is not None or thread_name:
             raise UserInputError(
-                "create_space_name cannot be combined with space_id or message_name: "
-                "a new space has no existing messages to target."
+                "create_space_name cannot be combined with space_id, message_name "
+                "or thread_name: a new space has no existing messages or threads "
+                "to target."
             )
     elif space_id is None:
         raise UserInputError(
@@ -304,15 +307,31 @@ def _validate_space_target(
 async def _setup_space(
     chat_service, display_name: str, member_emails: Optional[List[str]] = None
 ) -> dict:
-    """Create a named space via spaces.setup; the caller is added as a manager."""
-    body = {"space": {"spaceType": "SPACE", "displayName": display_name}}
+    """Create a named space via spaces.setup; the caller is added as a manager.
+
+    A transport failure leaves it unknown whether the space was created, so the
+    request is retried once with the same requestId, which makes the API return
+    the space it already created instead of failing on the taken display name.
+    """
+    body = {
+        "space": {"spaceType": "SPACE", "displayName": display_name},
+        "requestId": str(uuid.uuid4()),
+    }
     emails = [e.strip() for e in member_emails or [] if e and e.strip()]
     if emails:
         body["memberships"] = [
             {"member": {"name": f"users/{email}", "type": "HUMAN"}} for email in emails
         ]
     try:
-        return await asyncio.to_thread(chat_service.spaces().setup(body=body).execute)
+        try:
+            return await asyncio.to_thread(
+                chat_service.spaces().setup(body=body).execute
+            )
+        except OSError as e:
+            logger.warning(f"spaces.setup interrupted ({e}); retrying with requestId")
+            return await asyncio.to_thread(
+                chat_service.spaces().setup(body=body).execute
+            )
     except HttpError as e:
         if _is_scope_error(e):
             raise ToolError(
