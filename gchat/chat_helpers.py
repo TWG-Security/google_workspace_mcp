@@ -304,12 +304,20 @@ def _validate_space_target(
         )
 
 
-def _clean_emails(member_emails: Optional[List[str]]) -> List[str]:
-    return [e.strip() for e in member_emails or [] if e and e.strip()]
+def _clean_emails(
+    member_emails: Optional[List[str]], caller_email: Optional[str] = None
+) -> List[str]:
+    """Strip blank entries and the caller, whom spaces.setup adds on its own."""
+    caller = (caller_email or "").strip().lower()
+    emails = [e.strip() for e in member_emails or [] if e and e.strip()]
+    return [e for e in emails if e.lower() != caller]
 
 
 async def _setup_space(
-    chat_service, display_name: str, member_emails: Optional[List[str]] = None
+    chat_service,
+    display_name: str,
+    member_emails: Optional[List[str]] = None,
+    caller_email: Optional[str] = None,
 ) -> dict:
     """Create a named space via spaces.setup; the caller is added as a manager.
 
@@ -321,7 +329,7 @@ async def _setup_space(
         "space": {"spaceType": "SPACE", "displayName": display_name},
         "requestId": str(uuid.uuid4()),
     }
-    emails = _clean_emails(member_emails)
+    emails = _clean_emails(member_emails, caller_email)
     if emails:
         body["memberships"] = [
             {"member": {"name": f"users/{email}", "type": "HUMAN"}} for email in emails
@@ -346,7 +354,10 @@ async def _setup_space(
 
 
 async def _unconfirmed_members(
-    chat_service, space_id: str, member_emails: Optional[List[str]]
+    chat_service,
+    space_id: str,
+    member_emails: Optional[List[str]],
+    caller_email: Optional[str] = None,
 ) -> str:
     """Check each requested member of a new space; describe any not confirmed.
 
@@ -356,7 +367,7 @@ async def _unconfirmed_members(
     prompt the client to create it again.
     """
     unconfirmed = []
-    for email in _clean_emails(member_emails):
+    for email in _clean_emails(member_emails, caller_email):
         try:
             await asyncio.to_thread(
                 chat_service.spaces()

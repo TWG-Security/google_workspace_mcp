@@ -340,13 +340,17 @@ async def send_message(
 
     space_note = ""
     if create_space_name is not None:
-        space = await _setup_space(service, create_space_name, member_emails)
+        space = await _setup_space(
+            service, create_space_name, member_emails, user_google_email
+        )
         space_id = space.get("name", "")
         space_note = (
             f"Created space '{space.get('displayName', create_space_name)}' "
             f"(ID: {space_id}).\n"
         )
-        members_note = await _unconfirmed_members(service, space_id, member_emails)
+        members_note = await _unconfirmed_members(
+            service, space_id, member_emails, user_google_email
+        )
         if members_note:
             space_note += f"{members_note}\n"
 

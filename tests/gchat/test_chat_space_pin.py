@@ -95,6 +95,22 @@ async def test_create_space_with_members_then_send(chat_service):
 
 
 @pytest.mark.asyncio
+async def test_create_space_leaves_out_the_caller(chat_service):
+    await _send(
+        create_space_name="Project 8542",
+        member_emails=["Test@Example.com", "a@example.com"],
+    )
+
+    spaces = chat_service.spaces.return_value
+    assert spaces.setup.call_args.kwargs["body"]["memberships"] == [
+        {"member": {"name": "users/a@example.com", "type": "HUMAN"}}
+    ]
+    spaces.members.return_value.get.assert_called_once_with(
+        name="spaces/NEW/members/a@example.com"
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_space_confirms_each_member(chat_service):
     result = await _send(
         create_space_name="Project 8542", member_emails=["a@example.com"]
