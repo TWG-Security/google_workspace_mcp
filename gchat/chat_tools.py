@@ -32,6 +32,7 @@ from gchat.chat_helpers import (
     _pin_message,
     _resolve_sender,
     _setup_space,
+    _unconfirmed_members,
     _validate_space_target,
 )
 
@@ -275,7 +276,8 @@ async def send_message(
             send the message into it. Cannot be combined with space_id,
             message_name or thread_name.
         member_emails: With create_space_name, email addresses of people to add to
-            the new space. The calling user is added automatically.
+            the new space. The calling user is added automatically. Members
+            that cannot be confirmed afterwards are named in the result.
         pin: Pin the sent or edited message in its space.
 
     Creating a space and pinning also need the chat.spaces scope (part of the
@@ -344,6 +346,9 @@ async def send_message(
             f"Created space '{space.get('displayName', create_space_name)}' "
             f"(ID: {space_id}).\n"
         )
+        members_note = await _unconfirmed_members(service, space_id, member_emails)
+        if members_note:
+            space_note += f"{members_note}\n"
 
     message_body = {"text": message_text}
 

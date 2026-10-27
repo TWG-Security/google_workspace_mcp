@@ -95,6 +95,59 @@ async def test_create_space_with_members_then_send(chat_service):
 
 
 @pytest.mark.asyncio
+async def test_create_space_confirms_each_member(chat_service):
+    result = await _send(
+        create_space_name="Project 8542", member_emails=["a@example.com"]
+    )
+
+    chat_service.spaces.return_value.members.return_value.get.assert_called_once_with(
+        name="spaces/NEW/members/a@example.com"
+    )
+    assert "not confirmed" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_space_reports_members_not_confirmed(chat_service):
+    def get(name):
+        request = Mock()
+        if name.endswith("b@example.com"):
+            request.execute.side_effect = HttpError(
+                Response({"status": "404"}),
+                json.dumps({"error": {"code": 404, "message": "Not found"}}).encode(),
+            )
+        elif name.endswith("c@example.com"):
+            request.execute.side_effect = ConnectionResetError("connection reset")
+        return request
+
+    chat_service.spaces.return_value.members.return_value.get.side_effect = get
+
+    result = await _send(
+        create_space_name="Project 8542",
+        member_emails=["a@example.com", "b@example.com", "c@example.com"],
+    )
+
+    assert "Member additions not confirmed for: b@example.com, c@example.com." in result
+    assert "Message sent to space 'spaces/NEW'" in result
+
+
+@pytest.mark.asyncio
+async def test_create_space_without_memberships_scope_says_members_unconfirmed(
+    chat_service,
+):
+    members = chat_service.spaces.return_value.members.return_value
+    members.get.return_value.execute.side_effect = _scope_error()
+
+    result = await _send(
+        create_space_name="Project 8542",
+        member_emails=["a@example.com", "b@example.com"],
+    )
+
+    assert "chat.memberships.readonly scope" in result
+    members.get.assert_called_once()
+    assert "Message sent to space 'spaces/NEW'" in result
+
+
+@pytest.mark.asyncio
 async def test_create_space_without_members_omits_memberships(chat_service):
     await _send(create_space_name="Solo")
 

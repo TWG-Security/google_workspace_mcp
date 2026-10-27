@@ -304,6 +304,10 @@ def _validate_space_target(
         )
 
 
+def _clean_emails(member_emails: Optional[List[str]]) -> List[str]:
+    return [e.strip() for e in member_emails or [] if e and e.strip()]
+
+
 async def _setup_space(
     chat_service, display_name: str, member_emails: Optional[List[str]] = None
 ) -> dict:
@@ -317,7 +321,7 @@ async def _setup_space(
         "space": {"spaceType": "SPACE", "displayName": display_name},
         "requestId": str(uuid.uuid4()),
     }
-    emails = [e.strip() for e in member_emails or [] if e and e.strip()]
+    emails = _clean_emails(member_emails)
     if emails:
         body["memberships"] = [
             {"member": {"name": f"users/{email}", "type": "HUMAN"}} for email in emails
@@ -339,6 +343,43 @@ async def _setup_space(
                 "lacks. Re-authenticate with the default Chat scopes and retry."
             ) from e
         raise
+
+
+async def _unconfirmed_members(
+    chat_service, space_id: str, member_emails: Optional[List[str]]
+) -> str:
+    """Check each requested member of a new space; describe any not confirmed.
+
+    The spaces.setup response does not list memberships, so each email is looked
+    up with members.get, which accepts an email as the member ID. Failures are
+    reported rather than raised: the space already exists, and an error would
+    prompt the client to create it again.
+    """
+    unconfirmed = []
+    for email in _clean_emails(member_emails):
+        try:
+            await asyncio.to_thread(
+                chat_service.spaces()
+                .members()
+                .get(name=f"{space_id}/members/{email}")
+                .execute
+            )
+        except HttpError as e:
+            if _is_scope_error(e):
+                return (
+                    "Member additions not confirmed: checking them needs the "
+                    "chat.memberships.readonly scope, which this token lacks."
+                )
+            unconfirmed.append(email)
+        except Exception as e:
+            logger.debug(f"Could not confirm member {email} of {space_id}: {e}")
+            unconfirmed.append(email)
+    if not unconfirmed:
+        return ""
+    return (
+        f"Member additions not confirmed for: {', '.join(unconfirmed)}. "
+        "They may not have been added to the space."
+    )
 
 
 async def _create_message(chat_service, request_params: dict, created_space: bool):
